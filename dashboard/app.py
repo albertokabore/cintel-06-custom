@@ -1,65 +1,63 @@
-from shiny.express import input, render, ui
-from shiny import reactive, App
+from shiny.express import input, ui, render, reactive
 import pandas as pd
-import plotly.express as px
 from pathlib import Path
-from shinywidgets import output_widget, render_widget
-import faicons
-import ridgeplot
+from datetime import datetime
+import random
+import plotly.express as px
 
-# Load dataset
-DATA_PATH = Path(__file__).parent / "GHW_HeartFailure_Readmission_Combined.csv"
-df = pd.read_csv(DATA_PATH)
+# --------------------------------------------
+# Read the data (from CSV in same directory)
+# --------------------------------------------
+tips_df: pd.DataFrame = pd.read_csv(Path(__file__).parent / "tips.csv")
 
-# Define UI
-df_columns = df.columns.tolist()
-
-ui.page_opts(title="Heart Failure Readmission Dashboard", fillable=True)
-
-with ui.sidebar():
-    ui.input_select("readmit_filter", "Filter by Readmission (30/60 Days)",
-                    choices=["All", "0", "1"], selected="All")
-    ui.input_select("chart_x", "Select X-axis for Chart", choices=df_columns, selected="Age")
-    ui.input_select("chart_y", "Select Y-axis for Chart", choices=df_columns, selected="NT_proBNP")
-    ui.input_slider("num_rows", "Number of Rows in Data Grid", min=5, max=50, value=20)
-
-# Reactive filter based on user selection
-@reactive.calc
+# --------------------------------------------
+# Reactive calc to filter data by selected day
+# --------------------------------------------
+@reactive.calc()
 def filtered_data():
-    if input.readmit_filter() == "All":
-        return df
-    else:
-        return df[df["Readmission_30or60Days"] == int(input.readmit_filter())]
+    selected_day = input.day()
+    if selected_day == "All":
+        return tips_df
+    return tips_df[tips_df["day"] == selected_day]
 
-# Main layout
+# --------------------------------------------
+# Reactive calc to simulate live temperature
+# --------------------------------------------
+@reactive.calc()
+def live_data():
+    reactive.invalidate_later(1)
+    temp = round(random.uniform(36, 39), 1)
+    time = datetime.now().strftime("%H:%M:%S")
+    return {"temp": temp, "time": time}
+
+# --------------------------------------------
+# Define the Shiny Express UI
+# --------------------------------------------
+ui.page_opts(title="Tips Dashboard - Albert Kabore", fillable=True)
+
+# Sidebar: User Input
+with ui.sidebar():
+    ui.input_select("day", "Filter by Day:", ["All"] + sorted(tips_df["day"].unique().tolist()))
+    ui.hr()
+    ui.markdown("Use the dropdown to filter the dataset by day.")
+
+# Main Panel
 with ui.layout_columns():
-    ui.value_box("Total Patients", df.shape[0], showcase=faicons.icon_svg("users"))
-    ui.value_box("Unique Readmissions", df[df["Readmission_30or60Days"] == 1].shape[0], showcase=faicons.icon_svg("heartbeat"))
+    ui.value_box("Live Temp (°C)", live_data().get("temp"))
+    ui.value_box("Current Time", live_data().get("time"))
 
 with ui.card(full_screen=True):
-    ui.card_header("Patient Data Grid")
+    ui.card_header("Filtered Data Table")
+
     @render.data_frame
-    def data_table():
-        return filtered_data().head(input.num_rows())
+    def table():
+        return filtered_data()
 
 with ui.card():
-    ui.card_header("Readmission Scatter Plot")
+    ui.card_header("Tip vs Total Bill (Plotly Scatter)")
+
     @render.plotly
-    def plot():
-        return px.scatter(filtered_data(), x=input.chart_x(), y=input.chart_y(), color="Readmission_30or60Days",
-                          title="Scatter Plot by Selected Axes")
-
-with ui.card():
-    ui.card_header("Readmission Ridge Plot")
-    @render_widget
-    def ridge():
-        fig = ridgeplot.ridgeplot(
-            data=filtered_data(),
-            x=input.chart_x(),
-            y="Readmission_30or60Days",
-            title=f"Distribution of {input.chart_x()} by Readmission"
-        )
+    def scatter_plot():
+        df = filtered_data()
+        fig = px.scatter(df, x="total_bill", y="tip", color="sex", title="Tip vs Total Bill")
         return fig
-
-# Define App
-app = App(ui, server=None)
