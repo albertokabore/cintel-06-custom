@@ -1,65 +1,99 @@
-from shiny.express import input, render, ui
-from shiny import reactive, App
+from shiny import App, reactive, render, ui
+from shinywidgets import output_widget, render_widget
 import pandas as pd
 import plotly.express as px
+import faicons as fa
+from datetime import datetime
+import random
 from pathlib import Path
-from shinywidgets import output_widget, render_widget
-import faicons
-import ridgeplot
 
+# ------------------------------
+# Constants
+# ------------------------------
+UPDATE_INTERVAL_SECS = 1
+
+# ------------------------------
 # Load dataset
-DATA_PATH = Path(__file__).parent / "GHW_HeartFailure_Readmission_Combined.csv"
-df = pd.read_csv(DATA_PATH)
+# ------------------------------
+TIPS_PATH = Path(__file__).parent / "tips.csv"
+tips = pd.read_csv(TIPS_PATH)
+bill_rng = (tips.total_bill.min(), tips.total_bill.max())
 
-# Define UI
-df_columns = df.columns.tolist()
+# ------------------------------
+# Icons
+# ------------------------------
+ICONS = {
+    "user": fa.icon_svg("user", fill="currentColor"),
+    "wallet": fa.icon_svg("wallet"),
+    "currency-dollar": fa.icon_svg("dollar-sign"),
+    "ellipsis": fa.icon_svg("ellipsis")
+}
 
-ui.page_opts(title="Heart Failure Readmission Dashboard", fillable=True)
+# ------------------------------
+# Reactive live tip generator
+# ------------------------------
+@reactive.calc
+def live_tip():
+    reactive.invalidate_later(UPDATE_INTERVAL_SECS)
+    tip = round(random.uniform(10, 30), 2)
+    time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return tip, time
 
-with ui.sidebar():
-    ui.input_select("readmit_filter", "Filter by Readmission (30/60 Days)",
-                    choices=["All", "0", "1"], selected="All")
-    ui.input_select("chart_x", "Select X-axis for Chart", choices=df_columns, selected="Age")
-    ui.input_select("chart_y", "Select Y-axis for Chart", choices=df_columns, selected="NT_proBNP")
-    ui.input_slider("num_rows", "Number of Rows in Data Grid", min=5, max=50, value=20)
-
-# Reactive filter based on user selection
+# ------------------------------
+# Reactive filtered data
+# ------------------------------
 @reactive.calc
 def filtered_data():
-    if input.readmit_filter() == "All":
-        return df
-    else:
-        return df[df["Readmission_30or60Days"] == int(input.readmit_filter())]
+    df = tips.copy()
+    min_bill, max_bill = input.bill()
+    df = df[(df["total_bill"] >= min_bill) & (df["total_bill"] <= max_bill)]
 
-# Main layout
+    selected_times = input.times()
+    if selected_times:
+        df = df[df["time"].isin(selected_times)]
+
+    return df
+
+# ------------------------------
+# UI Layout
+# ------------------------------
+ui.page_opts(title="Albert Kabore - Restaurant Tipping Dashboard", fillable=True)
+
+with ui.sidebar():
+    ui.input_slider("bill", "Bill amount", min=bill_rng[0], max=bill_rng[1], value=bill_rng, step=1)
+    ui.input_checkbox_group("times", "Food service", choices=["Lunch", "Dinner"], selected=["Lunch", "Dinner"])
+    ui.input_action_button("reset_btn", "Reset filter")
+
 with ui.layout_columns():
-    ui.value_box("Total Patients", df.shape[0], showcase=faicons.icon_svg("users"))
-    ui.value_box("Unique Readmissions", df[df["Readmission_30or60Days"] == 1].shape[0], showcase=faicons.icon_svg("heartbeat"))
+    ui.value_box("Total tippers", tips.shape[0], showcase=ICONS["user"])
+    ui.value_box("Average tip", f"{round(tips.tip.mean()/tips.total_bill.mean()*100, 1)}%", showcase=ICONS["wallet"])
+    ui.value_box("Average bill", f"${round(tips.total_bill.mean(), 2)}", showcase=ICONS["currency-dollar"])
 
-with ui.card(full_screen=True):
-    ui.card_header("Patient Data Grid")
+    tip_val, tip_time = live_tip()
+    ui.value_box("Live Tip Update", f"Live Tip: {tip_val} at {tip_time}", showcase=ICONS["ellipsis"])
+
+with ui.card():
+    ui.card_header("Tips data")
     @render.data_frame
-    def data_table():
-        return filtered_data().head(input.num_rows())
+    def show_table():
+        return filtered_data()
 
 with ui.card():
-    ui.card_header("Readmission Scatter Plot")
+    ui.card_header("Total bill vs tip")
     @render.plotly
-    def plot():
-        return px.scatter(filtered_data(), x=input.chart_x(), y=input.chart_y(), color="Readmission_30or60Days",
-                          title="Scatter Plot by Selected Axes")
+    def scatter_plot():
+        df = filtered_data()
+        return px.scatter(df, x="total_bill", y="tip", title="Total bill vs tip", trendline="ols")
 
 with ui.card():
-    ui.card_header("Readmission Ridge Plot")
-    @render_widget
-    def ridge():
-        fig = ridgeplot.ridgeplot(
-            data=filtered_data(),
-            x=input.chart_x(),
-            y="Readmission_30or60Days",
-            title=f"Distribution of {input.chart_x()} by Readmission"
-        )
-        return fig
+    ui.card_header("Tip percentages")
+    @render.plotly
+    def tip_hist():
+        df = filtered_data().copy()
+        df["percent"] = (df["tip"] / df["total_bill"] * 100).round(1)
+        return px.histogram(df, x="percent", color="day", barmode="group", title="Distribution of Tip Percentage")
 
-# Define App
+# ------------------------------
+# App
+# ------------------------------
 app = App(ui, server=None)
