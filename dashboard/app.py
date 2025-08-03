@@ -1,65 +1,85 @@
-from shiny import App
-from shiny.express import input, ui, render, reactive
+from shiny import App, reactive, render, ui
+from shinywidgets import render_plotly, output_widget
 import pandas as pd
-from pathlib import Path
-from datetime import datetime
+import seaborn as sns
 import random
+from datetime import datetime
 import plotly.express as px
 
 # --------------------------------------------
-# Read the data
+# Load the tips dataset
 # --------------------------------------------
-tips_df: pd.DataFrame = pd.read_csv(Path(__file__).parent / "tips.csv")
+tips_df: pd.DataFrame = sns.load_dataset("tips")
 
 # --------------------------------------------
-# Reactive calc to filter data by selected day
+# UI Layout
 # --------------------------------------------
-@reactive.calc()
-def filtered_data():
-    selected_day = input.day()
-    if selected_day == "All":
-        return tips_df
-    return tips_df[tips_df["day"] == selected_day]
+app_ui = ui.page_sidebar(
+    ui.sidebar(
+        ui.input_select("day", "Filter by Day:", ["All"] + sorted(tips_df["day"].unique().tolist())),
+        ui.hr(),
+        ui.markdown("Use the dropdown menu to filter data by day of the week."),
+        open="desktop"
+    ),
+    ui.layout_columns(
+        ui.value_box("Live Temperature (°C)", ui.output_ui("live_temp")),
+        ui.value_box("Current Time", ui.output_ui("live_time")),
+    ),
+    ui.card(
+        ui.card_header("Filtered Tips Data"),
+        ui.output_data_frame("table"),
+        full_screen=True
+    ),
+    ui.card(
+        ui.card_header("Tip vs Total Bill (Plotly Scatter)"),
+        output_widget("scatter_plot")  # ✅ Use this instead of ui.output_plot
+    ),
+    title="Tips Dashboard - Albert Kabore",
+    fillable=True
+)
 
 # --------------------------------------------
-# Reactive calc to simulate a live temperature
+# Server Logic
 # --------------------------------------------
-@reactive.calc()
-def live_data():
-    reactive.invalidate_later(1)
-    temp = round(random.uniform(36, 39), 1)
-    time = datetime.now().strftime("%H:%M:%S")
-    return {"temp": temp, "time": time}
+def server(input, output, session):
 
-# --------------------------------------------
-# Define the Shiny Express UI
-# --------------------------------------------
-ui.page_opts(title="Tips Dashboard - Albert Kabore", fillable=True)
+    @reactive.calc()
+    def filtered_data():
+        selected_day = input.day()
+        if selected_day == "All":
+            return tips_df
+        return tips_df[tips_df["day"] == selected_day]
 
-# Sidebar: User Input
-with ui.sidebar():
-    ui.input_select("day", "Filter by Day:", ["All"] + sorted(tips_df["day"].unique().tolist()))
-    ui.hr()
-    ui.markdown("Use the dropdown to filter the dataset by day.")
+    @reactive.calc()
+    def live_data():
+        reactive.invalidate_later(1)
+        temp = round(random.uniform(36, 39), 1)
+        time = datetime.now().strftime("%H:%M:%S")
+        return {"temp": temp, "time": time}
 
-# Main Panel
-with ui.layout_columns():
-    ui.value_box("Live Temp (°C)", live_data().get("temp"))
-    ui.value_box("Current Time", live_data().get("time"))
+    @output
+    @render.ui
+    def live_temp():
+        return f"{live_data()['temp']}"
 
-with ui.card(full_screen=True):
-    ui.card_header("Filtered Data Table")
+    @output
+    @render.ui
+    def live_time():
+        return f"{live_data()['time']}"
+
+    @output
     @render.data_frame
     def table():
-        return filtered_data()
+        return render.DataGrid(filtered_data())
 
-with ui.card():
-    ui.card_header("Tip vs Total Bill (Plotly Scatter)")
-    @render.plotly
+    @output
+    @render_plotly
     def scatter_plot():
         df = filtered_data()
         fig = px.scatter(df, x="total_bill", y="tip", color="sex", title="Tip vs Total Bill")
         return fig
 
-# Instantiate the app
-app = App()
+# --------------------------------------------
+# Create the App
+# --------------------------------------------
+app = App(app_ui, server)
