@@ -1,69 +1,65 @@
-# -----------------------------
-# Imports (at the top)
-# -----------------------------
-from shiny import App, reactive, render, ui
-from shiny.express import input, output, ui
+from shiny import App
+from shiny.express import input, ui, render, reactive
 import pandas as pd
-import plotly.express as px
 from pathlib import Path
+from datetime import datetime
+import random
+import plotly.express as px
 
-# -----------------------------
-# Load Dataset
-# -----------------------------
-data_path = Path(__file__).parent / "GHW_HeartFailure_Readmission_Combined.csv"
-df = pd.read_csv(data_path)
+# --------------------------------------------
+# Read the data
+# --------------------------------------------
+tips_df: pd.DataFrame = pd.read_csv(Path(__file__).parent / "tips.csv")
 
-# -----------------------------
-# Reactive Calc to Filter DataFrame
-# -----------------------------
+# --------------------------------------------
+# Reactive calc to filter data by selected day
+# --------------------------------------------
 @reactive.calc()
 def filtered_data():
-    selected_gender = input.gender()
-    return df[df["Gender"] == selected_gender] if selected_gender != "All" else df
+    selected_day = input.day()
+    if selected_day == "All":
+        return tips_df
+    return tips_df[tips_df["day"] == selected_day]
 
-# -----------------------------
-# Define Shiny Express UI
-# -----------------------------
-ui.page_opts(title="Heart Failure Readmission Dashboard", fillable=True)
+# --------------------------------------------
+# Reactive calc to simulate a live temperature
+# --------------------------------------------
+@reactive.calc()
+def live_data():
+    reactive.invalidate_later(1)
+    temp = round(random.uniform(36, 39), 1)
+    time = datetime.now().strftime("%H:%M:%S")
+    return {"temp": temp, "time": time}
 
-# Sidebar
-with ui.sidebar(open="open"):
-    ui.input_select(
-        "gender",
-        "Select Gender",
-        choices=["All"] + sorted(df["Gender"].dropna().unique().tolist()),
-        selected="All"
-    )
+# --------------------------------------------
+# Define the Shiny Express UI
+# --------------------------------------------
+ui.page_opts(title="Tips Dashboard - Albert Kabore", fillable=True)
 
-# -----------------------------
-# Main Section - UI Cards, Value Boxes, Data Grid, Chart
-# -----------------------------
+# Sidebar: User Input
+with ui.sidebar():
+    ui.input_select("day", "Filter by Day:", ["All"] + sorted(tips_df["day"].unique().tolist()))
+    ui.hr()
+    ui.markdown("Use the dropdown to filter the dataset by day.")
+
+# Main Panel
 with ui.layout_columns():
-    @output
-    @render.text
-    def total_patients():
-        return f"Total Patients: {len(filtered_data())}"
+    ui.value_box("Live Temp (°C)", live_data().get("temp"))
+    ui.value_box("Current Time", live_data().get("time"))
 
-    @output
-    @render.text
-    def readmission_rate():
-        rate = filtered_data()["Readmitted"].mean() * 100
-        return f"Readmission Rate: {rate:.2f}%"
-
-with ui.layout_columns():
-    @output
+with ui.card(full_screen=True):
+    ui.card_header("Filtered Data Table")
     @render.data_frame
-    def data_table():
-        return filtered_data().head(10)
+    def table():
+        return filtered_data()
 
-    @output
+with ui.card():
+    ui.card_header("Tip vs Total Bill (Plotly Scatter)")
     @render.plotly
-    def readmission_by_age():
-        fig = px.histogram(filtered_data(), x="Age", color="Readmitted", barmode="group")
-        fig.update_layout(title="Readmission by Age")
+    def scatter_plot():
+        df = filtered_data()
+        fig = px.scatter(df, x="total_bill", y="tip", color="sex", title="Tip vs Total Bill")
         return fig
 
-# -----------------------------
-# Create App
-# -----------------------------
+# Instantiate the app
 app = App()
