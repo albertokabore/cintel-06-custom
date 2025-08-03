@@ -1,69 +1,177 @@
-# -----------------------------
-# Imports (at the top)
-# -----------------------------
-from shiny import App, reactive, render, ui
-from shiny.express import input, output, ui
-import pandas as pd
+import faicons as fa
 import plotly.express as px
-from pathlib import Path
+import seaborn as sns
+import pandas as pd
+from datetime import datetime
+import random
+
+from shiny import App, reactive, render, ui
+from shinywidgets import output_widget, render_plotly
 
 # -----------------------------
-# Load Dataset
+# Constants
 # -----------------------------
-data_path = Path(__file__).parent / "GHW_HeartFailure_Readmission_Combined.csv"
-df = pd.read_csv(data_path)
+UPDATE_INTERVAL_SECS = 1
+
+# Load the tips dataset from seaborn
+tips = sns.load_dataset("tips")
+bill_rng = (tips.total_bill.min(), tips.total_bill.max())
+
+ICONS = {
+    "user": fa.icon_svg("user", "regular"),
+    "wallet": fa.icon_svg("wallet"),
+    "currency-dollar": fa.icon_svg("dollar-sign"),
+    "ellipsis": fa.icon_svg("ellipsis"),
+}
 
 # -----------------------------
-# Reactive Calc to Filter DataFrame
+# UI layout
 # -----------------------------
-@reactive.calc()
-def filtered_data():
-    selected_gender = input.gender()
-    return df[df["Gender"] == selected_gender] if selected_gender != "All" else df
+app_ui = ui.page_sidebar(
+    ui.sidebar(
+        ui.input_slider("total_bill", "Bill amount", min=bill_rng[0], max=bill_rng[1], value=bill_rng, pre="$"),
+        ui.input_checkbox_group("time", "Food service", ["Lunch", "Dinner"], selected=["Lunch", "Dinner"], inline=True),
+        ui.input_action_button("reset", "Reset filter"),
+        open="desktop",
+    ),
+    ui.layout_columns(
+        ui.value_box("Total tippers", ui.output_ui("total_tippers"), showcase=ICONS["user"]),
+        ui.value_box("Average tip", ui.output_ui("average_tip"), showcase=ICONS["wallet"]),
+        ui.value_box("Average bill", ui.output_ui("average_bill"), showcase=ICONS["currency-dollar"]),
+        ui.value_box("Live Tip Update", ui.output_ui("live_tip_value"), showcase=ICONS["wallet"]),
+        fill=False,
+    ),
+    ui.layout_columns(
+        ui.card(ui.card_header("Tips data"), ui.output_data_frame("table"), full_screen=True),
+        ui.card(
+            ui.card_header(
+                "Total bill vs tip",
+                ui.popover(
+                    ICONS["ellipsis"],
+                    ui.input_radio_buttons(
+                        "scatter_color", None, ["none", "sex", "smoker", "day", "time"], inline=True
+                    ),
+                    title="Add a color variable",
+                    placement="top",
+                ),
+                class_="d-flex justify-content-between align-items-center",
+            ),
+            output_widget("scatterplot"),
+            full_screen=True,
+        ),
+        ui.card(
+            ui.card_header(
+                "Tip percentages",
+                ui.popover(
+                    ICONS["ellipsis"],
+                    ui.input_radio_buttons(
+                        "tip_perc_y",
+                        "Split by:",
+                        ["sex", "smoker", "day", "time"],
+                        selected="day",
+                        inline=True,
+                    ),
+                    title="Add a color variable",
+                ),
+                class_="d-flex justify-content-between align-items-center",
+            ),
+            output_widget("tip_perc"),
+            full_screen=True,
+        ),
+        col_widths=[6, 6, 12],
+    ),
+    title="Mt. Kilimanjaro Restaurant Tipping Dashboard",
+    fillable=True,
+)
 
 # -----------------------------
-# Define Shiny Express UI
+# Server logic
 # -----------------------------
-ui.page_opts(title="Heart Failure Readmission Dashboard", fillable=True)
+def server(input, output, session):
+    @reactive.calc
+    def tips_data():
+        bill = input.total_bill()
+        idx1 = tips.total_bill.between(bill[0], bill[1])
+        idx2 = tips.time.isin(input.time())
+        return tips[idx1 & idx2]
 
-# Sidebar
-with ui.sidebar(open="open"):
-    ui.input_select(
-        "gender",
-        "Select Gender",
-        choices=["All"] + sorted(df["Gender"].dropna().unique().tolist()),
-        selected="All"
-    )
+    @render.ui
+    def total_tippers():
+        return tips_data().shape[0]
 
-# -----------------------------
-# Main Section - UI Cards, Value Boxes, Data Grid, Chart
-# -----------------------------
-with ui.layout_columns():
-    @output
-    @render.text
-    def total_patients():
-        return f"Total Patients: {len(filtered_data())}"
+    @render.ui
+    def average_tip():
+        d = tips_data()
+        if d.shape[0] > 0:
+            perc = d.tip / d.total_bill
+            return f"{perc.mean():.1%}"
 
-    @output
-    @render.text
-    def readmission_rate():
-        rate = filtered_data()["Readmitted"].mean() * 100
-        return f"Readmission Rate: {rate:.2f}%"
+    @render.ui
+    def average_bill():
+        d = tips_data()
+        if d.shape[0] > 0:
+            bill = d.total_bill.mean()
+            return f"${bill:.2f}"
 
-with ui.layout_columns():
-    @output
     @render.data_frame
-    def data_table():
-        return filtered_data().head(10)
+    def table():
+        return render.DataGrid(tips_data())
 
-    @output
-    @render.plotly
-    def readmission_by_age():
-        fig = px.histogram(filtered_data(), x="Age", color="Readmitted", barmode="group")
-        fig.update_layout(title="Readmission by Age")
+    @render_plotly
+    def scatterplot():
+        data = tips_data()
+        if data.empty:
+            return px.scatter()
+        color = input.scatter_color()
+        return px.scatter(
+            data,
+            x="total_bill",
+            y="tip",
+            color=None if color == "none" else color,
+            trendline="lowess",
+        )
+
+    @render_plotly
+    def tip_perc():
+        dat = tips_data().copy()
+        dat["percent"] = dat.tip / dat.total_bill
+        yvar = input.tip_perc_y()
+        fig = px.histogram(
+            dat,
+            x="percent",
+            color=yvar,
+            nbins=30,
+            barmode="overlay",
+            opacity=0.7,
+            labels={"percent": "Tip Percentage"},
+            title="Distribution of Tip Percentage",
+        )
+        fig.update_layout(
+            xaxis_tickformat=".0%",
+            legend_title_text=yvar,
+            bargap=0.1,
+        )
         return fig
 
+    @reactive.effect
+    @reactive.event(input.reset)
+    def _():
+        ui.update_slider("total_bill", value=bill_rng)
+        ui.update_checkbox_group("time", selected=["Lunch", "Dinner"])
+
+    @reactive.calc()
+    def reactive_calc_generate_data():
+        reactive.invalidate_later(UPDATE_INTERVAL_SECS)
+        tips_val = round(random.uniform(10, 25), 2)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        return {"tips": tips_val, "timestamp": timestamp}
+
+    @render.ui
+    def live_tip_value():
+        data = reactive_calc_generate_data()
+        return f"Live Tip: {data['tips']} at {data['timestamp']}"
+
 # -----------------------------
-# Create App
+# App instance
 # -----------------------------
-app = App()
+app = App(app_ui, server)
