@@ -18,10 +18,8 @@ df = pd.read_csv(data_path)
 # -----------------------------
 @reactive.calc()
 def filtered_data():
-    gender = input.gender()
-    if gender == "All":
-        return df
-    return df[df["Gender"] == gender]
+    selected_gender = input.gender()
+    return df[df["Gender"] == selected_gender] if selected_gender != "All" else df
 
 # -----------------------------
 # Define Shiny Express UI
@@ -32,45 +30,37 @@ ui.page_opts(title="Heart Failure Readmission Dashboard", fillable=True)
 with ui.sidebar(open="open"):
     ui.input_select(
         "gender",
-        "Filter by Gender",
+        "Select Gender",
         choices=["All"] + sorted(df["Gender"].dropna().unique().tolist()),
         selected="All"
     )
 
 # -----------------------------
-# Main Section - UI Cards, Value Boxes, Data Table, Plotly Chart
+# Main Section - UI Cards, Value Boxes, Data Grid, Chart
 # -----------------------------
 with ui.layout_columns():
     @output
     @render.text
     def total_patients():
-        return f"🧍 Total Patients: {len(filtered_data())}"
+        return f"Total Patients: {len(filtered_data())}"
 
     @output
     @render.text
     def readmission_rate():
-        readmitted_col = filtered_data()["Readmitted"]
-        if readmitted_col.dtype == "bool" or readmitted_col.nunique() == 2:
-            rate = readmitted_col.mean() * 100
-            return f"🔁 Readmission Rate: {rate:.2f}%"
-        return "Invalid 'Readmitted' column format."
+        rate = filtered_data()["Readmitted"].mean() * 100
+        return f"Readmission Rate: {rate:.2f}%"
 
 with ui.layout_columns():
     @output
     @render.data_frame
-    def data_grid():
+    def data_table():
         return filtered_data().head(10)
 
     @output
     @render.plotly
-    def plot_readmission_by_age():
-        fig = px.histogram(
-            filtered_data(),
-            x="Age",
-            color="Readmitted",
-            barmode="group",
-            title="Readmission by Age"
-        )
+    def readmission_by_age():
+        fig = px.histogram(filtered_data(), x="Age", color="Readmitted", barmode="group")
+        fig.update_layout(title="Readmission by Age")
         return fig
 
 # -----------------------------
