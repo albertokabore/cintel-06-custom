@@ -1,99 +1,79 @@
+# -----------------------------
+# Imports (at the top)
+# -----------------------------
 from shiny import App, reactive, render, ui
-from shinywidgets import output_widget, render_widget
+from shiny.express import input, output, ui
 import pandas as pd
 import plotly.express as px
-import faicons as fa
-from datetime import datetime
-import random
 from pathlib import Path
 
-# ------------------------------
-# Constants
-# ------------------------------
-UPDATE_INTERVAL_SECS = 1
+# -----------------------------
+# Load Dataset
+# -----------------------------
+data_path = Path(__file__).parent / "GHW_HeartFailure_Readmission_Combined.csv"
+df = pd.read_csv(data_path)
 
-# ------------------------------
-# Load dataset
-# ------------------------------
-TIPS_PATH = Path(__file__).parent / "tips.csv"
-tips = pd.read_csv(TIPS_PATH)
-bill_rng = (tips.total_bill.min(), tips.total_bill.max())
-
-# ------------------------------
-# Icons
-# ------------------------------
-ICONS = {
-    "user": fa.icon_svg("user", fill="currentColor"),
-    "wallet": fa.icon_svg("wallet"),
-    "currency-dollar": fa.icon_svg("dollar-sign"),
-    "ellipsis": fa.icon_svg("ellipsis")
-}
-
-# ------------------------------
-# Reactive live tip generator
-# ------------------------------
-@reactive.calc
-def live_tip():
-    reactive.invalidate_later(UPDATE_INTERVAL_SECS)
-    tip = round(random.uniform(10, 30), 2)
-    time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    return tip, time
-
-# ------------------------------
-# Reactive filtered data
-# ------------------------------
-@reactive.calc
+# -----------------------------
+# Reactive Calc to Filter DataFrame
+# -----------------------------
+@reactive.calc()
 def filtered_data():
-    df = tips.copy()
-    min_bill, max_bill = input.bill()
-    df = df[(df["total_bill"] >= min_bill) & (df["total_bill"] <= max_bill)]
+    gender = input.gender()
+    if gender == "All":
+        return df
+    return df[df["Gender"] == gender]
 
-    selected_times = input.times()
-    if selected_times:
-        df = df[df["time"].isin(selected_times)]
+# -----------------------------
+# Define Shiny Express UI
+# -----------------------------
+ui.page_opts(title="Heart Failure Readmission Dashboard", fillable=True)
 
-    return df
+# Sidebar
+with ui.sidebar(open="open"):
+    ui.input_select(
+        "gender",
+        "Filter by Gender",
+        choices=["All"] + sorted(df["Gender"].dropna().unique().tolist()),
+        selected="All"
+    )
 
-# ------------------------------
-# UI Layout
-# ------------------------------
-ui.page_opts(title="Albert Kabore - Restaurant Tipping Dashboard", fillable=True)
+# -----------------------------
+# Main Section - UI Cards, Value Boxes, Data Table, Plotly Chart
+# -----------------------------
+with ui.layout_columns():
+    @output
+    @render.text
+    def total_patients():
+        return f"🧍 Total Patients: {len(filtered_data())}"
 
-with ui.sidebar():
-    ui.input_slider("bill", "Bill amount", min=bill_rng[0], max=bill_rng[1], value=bill_rng, step=1)
-    ui.input_checkbox_group("times", "Food service", choices=["Lunch", "Dinner"], selected=["Lunch", "Dinner"])
-    ui.input_action_button("reset_btn", "Reset filter")
+    @output
+    @render.text
+    def readmission_rate():
+        readmitted_col = filtered_data()["Readmitted"]
+        if readmitted_col.dtype == "bool" or readmitted_col.nunique() == 2:
+            rate = readmitted_col.mean() * 100
+            return f"🔁 Readmission Rate: {rate:.2f}%"
+        return "Invalid 'Readmitted' column format."
 
 with ui.layout_columns():
-    ui.value_box("Total tippers", tips.shape[0], showcase=ICONS["user"])
-    ui.value_box("Average tip", f"{round(tips.tip.mean()/tips.total_bill.mean()*100, 1)}%", showcase=ICONS["wallet"])
-    ui.value_box("Average bill", f"${round(tips.total_bill.mean(), 2)}", showcase=ICONS["currency-dollar"])
-
-    tip_val, tip_time = live_tip()
-    ui.value_box("Live Tip Update", f"Live Tip: {tip_val} at {tip_time}", showcase=ICONS["ellipsis"])
-
-with ui.card():
-    ui.card_header("Tips data")
+    @output
     @render.data_frame
-    def show_table():
-        return filtered_data()
+    def data_grid():
+        return filtered_data().head(10)
 
-with ui.card():
-    ui.card_header("Total bill vs tip")
+    @output
     @render.plotly
-    def scatter_plot():
-        df = filtered_data()
-        return px.scatter(df, x="total_bill", y="tip", title="Total bill vs tip", trendline="ols")
+    def plot_readmission_by_age():
+        fig = px.histogram(
+            filtered_data(),
+            x="Age",
+            color="Readmitted",
+            barmode="group",
+            title="Readmission by Age"
+        )
+        return fig
 
-with ui.card():
-    ui.card_header("Tip percentages")
-    @render.plotly
-    def tip_hist():
-        df = filtered_data().copy()
-        df["percent"] = (df["tip"] / df["total_bill"] * 100).round(1)
-        return px.histogram(df, x="percent", color="day", barmode="group", title="Distribution of Tip Percentage")
-
-# ------------------------------
-# App
-# ------------------------------
-app = App(ui, server=None)
+# -----------------------------
+# Create App
+# -----------------------------
+app = App()
